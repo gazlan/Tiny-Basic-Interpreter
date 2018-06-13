@@ -1,0 +1,2444 @@
+{
+//////////////////////////////////////////////////////////////////////////
+// Tiny Basic Interpreter recompilesd with MSVC 6.0
+// http://www.noniandjim.com/Jim/uproc/tinymsdos.zip
+// (c) gazlan@yandex.ru, 2018
+//////////////////////////////////////////////////////////////////////////
+// Tiny Basic Interpreter
+// Copyright (c) 1995 Jim Patchell
+// Requires the use of Parsifal Software's Anagram LALR compiler.
+// http://www.parsifalsoft.com/
+//////////////////////////////////////////////////////////////////////////
+
+/* ******************************************************************** **
+**                uses pre-compiled headers
+** ******************************************************************** */
+
+#include "stdafx.h"
+
+#include "tiny.h"
+
+#ifdef _DEBUG
+#define new DEBUG_NEW
+#undef THIS_FILE
+static char THIS_FILE[] = __FILE__;
+#endif
+
+/* ******************************************************************** **
+** @@                   internal defines
+** ******************************************************************** */
+}
+[
+   ~allow macros
+   ~declare pcb
+   grammar token = basic
+   disregard white space
+   ~case sensitive
+   lexeme { eol, integer, name string, String Value }
+   distinguish lexemes
+   line numbers
+   ~near functions
+   sticky { then part, all character string }
+   pointer input
+
+   left {"||"}
+   left {"&&"}
+   left {'>','<'}
+   left {'=',"!="}
+   left {'|'}
+   left {'&'}
+   left {"<<",">>"}
+   left {'+','-'}
+   left {'*','/','%'}
+
+   parser file name = "tiny_basic.cpp"
+   header file name = "tiny_basic.h"
+]
+
+eof         = 0
+all letters = 1..126 - '"'
+letter      = 'a-z' + 'A-Z' + '_' + '.'
+digit       = '0-9'
+noteol      = ~(eof + '\n')
+
+eol
+   ->   '\n'
+   ->   '\r'
+
+(void)white space
+   ->   ' ' + '\t'
+
+(int)basic
+   -> basic statement list:v , eof                          = v;
+                                                            
+(int)basic statement list                                   
+   -> basic line:v                                          = v;
+   -> basic statement list , basic line:v                   = v;
+                                                            
+(int)basic line                                             
+   -> opt line number , basic statement:v , eol             = v;
+   -> opt line number , declaration , eol                     
+                                                            
+(void)opt line number                                       
+   ->                                                       
+   -> line number:ln                                        = 
+                                                            { 
+                                                               CurrentLineNumber = ln; 
+                                                            }
+
+(void)declaration
+   -> "INT" , decl var list:l                               = 
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  symbol*  s = l;
+                                                               
+                                                                  while (s)
+                                                                  {
+                                                                     s->SetType(SYMBOLTYPE_INT);
+                                                                     s = s->next;
+                                                                  }
+                                                               }
+                                                            }
+
+   -> "DOUBLE" , decl var list:l                            = 
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  symbol*  s = l;
+                                                               
+                                                                  while (s)
+                                                                  {
+                                                                     s->SetType(SYMBOLTYPE_DOUBLE);
+                                                                     s = s->next;
+                                                                  }
+                                                               }
+                                                            }
+
+   -> "STRING" , string decl var list
+
+(symbol*)decl var list
+   -> variable name:s                                       = s;
+   -> decl var list:l , ',' , variable name:s               = 
+                                                            {  
+                                                               if (bRun)
+                                                               {
+                                                                  s->next = l;
+                                                               }
+                                                            
+                                                               return s;
+                                                            }
+
+(symbol*)string decl var list
+   -> variable name:s , '[' , integer:d , ']'               = 
+                                                            {  
+                                                               if (bRun)
+                                                               {
+                                                                  s->SetMaxStringLen(d);
+                                                                  s->SetType(SYMBOLTYPE_STRING);
+                                                               }
+
+                                                               return s;
+                                                            }
+
+   -> string decl var list:l , ',' , variable name:s , '[' , integer:d , ']'   = 
+                                                            {  
+                                                               if (bRun)
+                                                               {
+                                                                  s->next = l;
+                                                                  s->SetMaxStringLen(d);
+                                                                  s->SetType(SYMBOLTYPE_STRING);
+                                                               }
+
+                                                               return s;
+                                                            }
+
+(int)basic statement
+   -> "DUMP"                                                = 
+                                                            { 
+                                                               Symbols->dump(stdout);
+                                                               return 0; 
+                                                            }
+
+   -> "LIST"                                                = 
+                                                            { 
+                                                               printf("%s\n",ProgramSpace);
+                                                               return 0; 
+                                                            }
+
+   -> "NEW"                                                 = 
+                                                            { 
+                                                               memset(ProgramSpace,0,ProgSpaceSize);
+                                                               return 0; 
+                                                            }
+
+   -> "RUN"                                                 = 
+                                                            {  
+                                                               buffer_selector = PROGRAM;
+                                                               PCB.pointer = (BYTE*)ProgramSpace;
+                                                               tiny();
+                                                               buffer_selector = COMMAND_LINE;
+                                                               return 0;
+                                                            }
+
+   -> "SAVE" , name string                                  = 
+                                                            {  
+                                                               name[name_index] = 0;
+
+                                                               char*    s = ProgramSpace;
+
+                                                               FILE*    out = fopen(name,"wt");
+
+                                                               if (!out)
+                                                               {
+                                                                  fprintf(stderr,"Could not open %s for save\n",name);
+                                                               }
+                                                               else
+                                                               {
+                                                                  while (*s)
+                                                                  {
+                                                                     fputc(*s++,out);
+                                                                  }
+
+                                                                  fclose(out);
+                                                               }
+
+                                                               return 0;
+                                                            }
+
+   -> "LOAD" , name string                                  = 
+                                                            {  
+                                                               name[name_index] = 0;
+
+                                                               char*    s = ProgramSpace;
+
+                                                               FILE*    in = fopen(name,"rt");
+
+                                                               int      c = 0;
+
+                                                               if (!in)
+                                                               {
+                                                                  fprintf(stderr,"Could not open %s for load\n",name);
+                                                               }
+                                                               else
+                                                               {
+                                                                  while ((c = fgetc(in)) != EOF)
+                                                                  {
+                                                                     *s++ = (char)c;
+                                                                  }
+                                                               }
+
+                                                               *s = 0;
+
+                                                               fclose(in);
+                                                               return 0;
+                                                            }
+
+   -> assignment                                            = 
+                                                            { 
+                                                               return 0; 
+                                                            }
+
+   -> conditional                                           = 
+                                                            { 
+                                                               return 0; 
+                                                            }
+
+   -> "GOTO" , line number:l                                = 
+                                                            {  
+                                                               char* s;
+                                                               int   flag;
+
+                                                               if (bRun)
+                                                               {
+                                                                  s = FindLine(l,ProgramSpace,&flag);
+
+                                                                  if (flag)
+                                                                  {
+                                                                     fprintf(stderr,"Could not find line %d\n",l);
+                                                                     PCB.exit_flag = AG_SEMANTIC_ERROR_CODE;
+                                                                  }
+                                                                  else
+                                                                  {
+                                                                     PCB.pointer = (BYTE*)s;
+                                                                     PCB.ssx = 0;
+                                                                     PCB.la_ptr = (BYTE*)s;
+                                                                     PCB.sn = 0; /* do the goto */
+                                                                  }
+                                                               }
+
+                                                               return 0;
+                                                            }
+
+   -> "GOSUB" , line number:l                               = 
+                                                            {
+                                                               // Save State 
+                                                               if (bRun)
+                                                               {
+                                                                  RetStack[++RetStackPointer].return_line = (char*)PCB.pointer;
+
+                                                                  RetStack[RetStackPointer].laptr = (char*)PCB.la_ptr;
+                                                                  RetStack[RetStackPointer].sn    = PCB.sn;
+                                                                  RetStack[RetStackPointer].ssx   = PCB.ssx;
+
+                                                                  int   flag = 0;
+
+                                                                  char*    s = FindLine(l,ProgramSpace,&flag);
+
+                                                                  if (flag)
+                                                                  {
+                                                                     fprintf(stderr,"Could not find line %d\n",l);
+                                                                     PCB.exit_flag = AG_SEMANTIC_ERROR_CODE;
+                                                                  }
+                                                                  else
+                                                                  {
+                                                                     PCB.pointer = (BYTE*)s;
+                                                                     PCB.ssx = 0;
+                                                                     PCB.la_ptr = (BYTE*)s;
+                                                                     PCB.sn = 0; /* do the goto */
+                                                                  }
+                                                               }
+
+                                                               return 0;
+                                                            }
+
+   -> "RETURN"                                              = 
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  PCB.pointer = (BYTE*)RetStack[RetStackPointer].return_line;
+                                                                  PCB.la_ptr  = (BYTE*)RetStack[RetStackPointer].laptr;
+                                                                  PCB.sn      = (int)RetStack[RetStackPointer].sn;
+                                                                  PCB.ssx     = RetStack[RetStackPointer--].ssx;
+                                                               }
+
+                                                               return 0;
+                                                            }
+
+   -> forloop                                               = 
+                                                            { 
+                                                               return 0; 
+                                                            }
+
+   -> "NEXT", variable name                                 = 
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  int   v = ForStack[ForStackPointer].loopvar->GetIntVal();
+                                                                  v += ForStack[ForStackPointer].step;
+
+                                                                  ForStack[ForStackPointer].loopvar->SetVal(v);
+
+                                                                  if (v <= ForStack[ForStackPointer].count)
+                                                                  {
+                                                                     // mess with input stream
+                                                                     PCB.pointer = (BYTE*)ForStack[ForStackPointer].start;
+                                                                     PCB.ssx = 0;
+                                                                     PCB.la_ptr = PCB.pointer;
+                                                                     PCB.sn = 0;
+                                                                  }
+                                                                  else
+                                                                  {
+                                                                     ForStackPointer--;
+                                                                  }
+                                                               }
+
+                                                               return 0;
+                                                            }
+
+   -> input                                                 = 
+                                                            { 
+                                                               return 0; 
+                                                            }
+
+   -> output                                                = 
+                                                            { 
+                                                               return 0; 
+                                                            }
+
+   -> "POKEB" , '(' , expression:p , ',' , expression:v , ')' =
+                                                            { 
+                                                               DoPoke(p,v,BYTE_POKE);
+                                                               return 0; 
+                                                            }
+
+   -> "POKEW" , '(' , expression:p , ',' , expression:v , ')' =
+                                                            { 
+                                                               DoPoke(p,v,WORD_POKE);
+                                                               return 0; 
+                                                            }
+
+   -> "POKEI" , '(' , expression:p , ',' , expression:v , ')' =
+                                                            { 
+                                                               DoPoke(p,v,INT_POKE);
+                                                               return 0; 
+                                                            }
+
+   -> "BYE"                                                 = 
+                                                            { 
+                                                               return 1; 
+                                                            }
+
+(void)input
+   -> "INPUT" , variable name list:s                        = 
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  while (s)
+                                                                  {
+                                                                     char*    d = getline('?');
+                                                                       
+                                                                       s->SetVal(strtol(d,NULL,10));
+                                                                       s = s->next;
+                                                                  }    
+                                                               }       
+                                                            }          
+                                                                       
+(symbol*)variable name list                                            
+   -> variable name:s                                       = s;       
+   -> variable name list:l , ',' , variable name:s          = 
+                                                            { 
+                                                               if (bRun)
+                                                               {
+                                                                  s->next = l; 
+                                                               }
+
+                                                               return s; 
+                                                            }
+
+(void)output
+   -> "PRINT", expression list:el                           = 
+                                                            {  
+                                                               ExpressionList*   l = el;
+
+                                                               if (bRun)
+                                                               {
+                                                                  while (l)
+                                                                  {
+                                                                     DoPrint(l->v);
+
+                                                                     l = l->next;
+
+                                                                     delete el;
+                                                                     el = l;
+                                                                  }
+
+                                                                  printf("\n");
+                                                               }
+                                                            }
+
+(ExpressionList*)expression list
+   -> expression:v                                          = 
+                                                            {  
+                                                               ExpressionList*   el = new ExpressionList;
+                                                               el->v = v;
+                                                               return el;
+                                                            }
+
+   -> expression list:list , ',' , expression:v             = 
+                                                            {
+                                                               ExpressionList*   el = new ExpressionList;
+
+                                                               ExpressionList*   l = list;
+
+                                                               while(l->next)
+                                                               {
+                                                                  l = l->next;
+                                                               }
+
+                                                               el->v = v;
+                                                               l->next = el;
+                                                               return list;
+                                                            }
+
+(symbol*)assignment
+   -> variable name:s , '=' , expression:v                  = 
+                                                            { 
+                                                               if (bRun)
+                                                               {
+                                                                  DoAssign(s,v); 
+                                                               }
+
+                                                               return s; 
+                                                            }
+
+(void)conditional
+   -> if part, then part, nothing
+   -> if part, then part, else part
+
+(void)nothing
+   ->                                                       = 
+                                                            { 
+                                                               bRun = 1; 
+                                                            }
+
+(void)if part
+   -> "IF" , expression:v                                   = 
+                                                            { 
+                                                               if (!ConvertToInt(v,1))
+                                                               {
+                                                                  bRun = 0; 
+                                                               }
+                                                            }
+
+(void)then part
+   -> "THEN" , basic statement                              = 
+                                                            { 
+                                                               if (bRun)
+                                                               {
+                                                                  bRun = false; 
+                                                               }
+                                                               else 
+                                                               {
+                                                                  bRun=true; 
+                                                               }
+                                                            }
+
+(void)else part
+   -> "ELSE", basic statement                               = 
+                                                            {
+                                                               bRun = true; 
+                                                            }
+
+(void)forloop
+   -> "FOR" , assignment:s , "TO" , expression:limit , optional step:step =
+                                                            {
+                                                               if (bRun)
+                                                               {
+                                                                  DoForLoop(s,limit,step);
+                                                               }
+                                                            }
+
+(symbol*) optional step
+   ->                                                       = MakeIntValue(1); // default step size
+   -> "STEP", expression:v                                  = v;
+
+(symbol*)expression
+   -> unary expression
+   -> expression:v1 , '=' ,  expression:v2                  = { symbol* s = DoEquals(v1,v2); return s; }
+   -> expression:v1 , "!=" , expression:v2                  = { symbol* s = DoNotEquals(v1,v2); return s; }
+   -> expression:v1 , "&&" , expression:v2                  = { symbol* s = DoLogicalAnd(v1,v2); return s; }
+   -> expression:v1 , "||" , expression:v2                  = { symbol* s = DoLogicalOr(v1,v2); return s; }
+   -> expression:v1 , '+' ,  expression:v2                  = { symbol* s = DoAdd(v1,v2); return s; }
+   -> expression:v1 , '-' ,  expression:v2                  = { symbol* s = DoSubtract(v1,v2); return s; }
+   -> expression:v1 , '*' ,  expression:v2                  = { symbol* s = DoMult(v1,v2); return s; }
+   -> expression:v1 , '/' ,  expression:v2                  = { symbol* s = DoDivide(v1,v2); return s; }
+   -> expression:v1 , '%' ,  expression:v2                  = { symbol* s = DoMod(v1,v2); return s; }
+   -> expression:v1 , '>' ,  expression:v2                  = { symbol* s = DoGreaterThan(v1,v2); return s; }
+   -> expression:v1 , '<' ,  expression:v2                  = { symbol* s = DoLessThan(v1,v2); return s; }
+   -> expression:v1 , ">>" , expression:v2                  = { symbol* s = DoShiftRight(v1,v2); return s; }
+   -> expression:v1 , "<<" , expression:v2                  = { symbol* s = DoShiftLeft(v1,v2); return s; }
+   -> expression:v1 , '&' ,  expression:v2                  = { symbol* s = DoBitAnd(v1,v2); return s; }
+   -> expression:v1 , '|' ,  expression:v2                  = { symbol* s = DoBitOr(v1,v2); return s; }
+
+(symbol*) unary expression
+   -> postfix expression
+   -> '-', expression:v                                     = 
+                                                            {  
+                                                               symbol*  s;
+                                                               s = DoNeg(v);
+                                                               return s;
+                                                            }
+
+(symbol*)postfix expression
+   -> primary expression
+   -> "ABS" ,  '(' , expression:v , ')'                     =
+                                                            {
+                                                               symbol* s = NULL;
+
+                                                               if (bRun)
+                                                               {
+                                                                  s = DoAbs(v);
+                                                               }
+
+                                                               return s;
+                                                            }
+   -> "RND" , '(' , expression:v, ')'                       =
+                                                            {
+                                                               symbol* s = NULL;
+
+                                                               if (bRun)
+                                                               {
+                                                                  s = DoRandom(v);
+                                                               }
+
+                                                               return s;
+                                                            }
+
+   -> "PEEKB",'(',expression:v,')'                          =
+                                                            {
+                                                               symbol*  s = DoPeekB(v);
+                                                               return s;
+                                                            }
+
+   -> "PEEKW",'(',expression:v,')'                          =
+                                                            {
+                                                               symbol*  s = DoPeekW(v);
+                                                               return s;
+                                                            }
+
+   -> "PEEKI",'(',expression:v,')'                          =
+                                                            {
+                                                               symbol*  s = DoPeekI(v);
+                                                               return s;
+                                                            }
+
+(symbol*) primary expression
+   -> variable name:s                                       = s;
+   -> integer:v                                             =
+                                                            {
+                                                               //create temporary symbol for integer value
+                                                               symbol* s = new symbol("temp");
+                                                               s->SetType(SYMBOLTYPE_TEMPINT);
+                                                               s->SetVal(v);
+                                                               return s;
+                                                            }
+
+   -> String Value:s                                        = s;
+   -> '(', expression:v , ')'                               = v;
+
+(symbol*)variable name
+   -> name string                                           =
+                                                            {
+                                                               symbol*  s = NULL;
+
+                                                               if (bRun)
+                                                               {
+                                                                  name[name_index] = 0;
+
+                                                                  s = (symbol*)Symbols->findsym(name);
+
+                                                                  if (!s)
+                                                                  {
+                                                                     s = (symbol*)Symbols->newsym(sizeof(symbol));
+
+                                                                     s->Init();        // fake constructor
+                                                                     s->SetName(name);
+                                                                     s->SetVal(0l);    //defualt value
+                                                                     s->SetType(SYMBOLTYPE_INT);
+                                                                     Symbols->addsym(s);
+                                                                  }
+                                                               }
+
+                                                               return s;
+                                                            }
+
+(symbol*)String Value
+   -> all character string,'"'                              =
+                                                            {
+                                                               symbol*  s = new symbol("temp");
+
+                                                               s->SetType(SYMBOLTYPE_TEMPSTRING);
+                                                               name[name_index] = 0;
+                                                               s->SetVal(name);
+                                                               return s;
+                                                            }
+
+(void)all character string
+   -> '"'                                                   = iins();
+   -> all character string , all letters:c                  = pcn(c);
+
+(void)name string
+   -> letter:c                                              = ins(c);
+   -> name string , letter + digit:c                        = pcn(c);
+
+(int)integer
+   -> digit:d                                               = d - '0';
+   -> integer:n, digit:d                                    = 10*n + d - '0';
+
+(int)line number
+   -> integer:d                                             = d;
+
+{
+// these are the C functions for the above basic grammar
+char* FindNextLine(int linenumber,char *s,int *flag);
+
+tiny_pcb_type     tiny_pcb[2];
+int               buffer_selector;
+
+#define PCB tiny_pcb[buffer_selector]
+#define COMMAND_LINE 0
+#define PROGRAM         1
+
+char              name[256];
+int               name_index;
+hashtab*          Symbols;
+char*             ProgramSpace;
+int               ProgSpaceSize;
+FOR_STACK         ForStack[20]; // 20 loops deep
+int               ForStackPointer = -1;
+int               CurrentLineNumber;
+bool              bRun = false;   // when true, parser actions really do something
+SubroutineStack   RetStack[100]; // one hundred levels of subroutine
+int               RetStackPointer = -1;
+
+//////////////////////////////////////////////////////////////////////////
+void iins()
+{
+   name_index = 0;
+}
+//////////////////////////////////////////////////////////////////////////
+void ins(int c)
+{
+   name[0] = (char)c;
+   name_index = 1;
+}
+//////////////////////////////////////////////////////////////////////////
+void pcn(int c)
+{
+   ASSERT(name_index < 256);
+   name[name_index++] = (char)c;
+}
+//////////////////////////////////////////////////////////////////////////
+// member functions for hashtab class
+//////////////////////////////////////////////////////////////////////////
+DWORD hashtab::hash(BYTE* name)
+{
+   //--------------------------------------------------------
+   // this is the hashing function.  It takes the character
+   // string name and creates a value from that...sort of
+   // like a CRC
+   //--------------------------------------------------------
+   DWORD h = 0;
+   DWORD g;
+
+   for (; *name; ++name)
+   {
+      h = (h << 2) + *name;
+
+      // this line is correct...do not change
+      g = h & 0xC000;
+
+      if (g)
+      {
+         h = (h ^ (g >> 12)) & 0x3fff;
+      }
+   }
+
+   return h;
+}
+//////////////////////////////////////////////////////////////////////////
+hashtab::hashtab(int size)
+{
+   //--------------------------------------------------------
+   //Constructor
+   //besides creating the hash table object, we need to create
+   // an array of BUCKET pointers.
+   // size: number of elements in the BUCKET pointer array
+   //     : It should be noted that this should be a prime
+   //     : number...it is a mathematic thingy
+   //--------------------------------------------------------
+   table = (BUCKET**)new char[size * sizeof(BUCKET*)];
+
+   memset(table,0,size * sizeof(BUCKET*));
+
+   tabsize = size;
+}
+//////////////////////////////////////////////////////////////////////////
+hashtab::~hashtab()
+{
+   delete[] table;
+   table = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+void* hashtab::newsym(int size)
+{
+   //---------------------------------------------------------
+   // Create a new symbol
+   // size: This is the size in bytes of the new symbol
+   // Action:
+   // Each symbol is contained in a BUCKET
+   // Allocate enough space for a BUCKET plus the symbol
+   // Increment the BUCKET * (variable s) which will now
+   // point to the symbol
+   // Think of this object as an array, the first element
+   // being a BUCKET and the second being a symbol
+   // When you increment the pointer to the BUCKET, you
+   // will point to the next element in the array, which
+   // happens to not be a BUCKET, but rather a symbol...
+   // pretty fucked up if you ask me
+   //---------------------------------------------------------
+
+   BUCKET*  s  = (BUCKET*)new char[sizeof(BUCKET) + size];
+
+   ++s;
+
+   return (void*)s;
+}
+//////////////////////////////////////////////////////////////////////////
+void* hashtab::addsym(void* isym)
+{
+   //----------------------------------------------------------------
+   // add a symbol to the hash table
+   //
+   // isym: pointer to the symbol to add
+   //     : the symbol should have been created with newsym (above)
+   // action:
+   //----------------------------------------------------------------
+   BUCKET** p, *tmp;
+   BUCKET*  sym = (BUCKET*)isym; // sym points to the symbol
+   //----------------------------------------------------------------
+   // the next line is pretty wierd...
+   // the first element in the symbol is the symbol name
+   // so by passing sym as a character pointer is
+   // passing the name to the hash function
+   // sym is then decremented, which then points us to the BUCKET
+   // the hash value is the MODed with the hash table size to get
+   // and index into the hash table, which we then use to get a
+   // BUCKET pointer to the first element.
+   //----------------------------------------------------------------
+   p = &table[hash((BYTE*) sym--) % tabsize];
+   tmp = *p;   // store the first element temporarily
+   *p  = sym;  // put new symbol at head of BUCKET list
+   sym->prev = p; //set the prev pointer
+   sym->next = tmp;  //set the next pointer
+
+   if (tmp)
+   {
+      tmp->prev = &sym->next;
+   }
+   ++numsyms;
+
+   return (void*) (sym + 1);
+}
+//////////////////////////////////////////////////////////////////////////
+void* hashtab::nextsym(void* ilast)
+{
+   BUCKET*  last  = (BUCKET*)ilast;
+
+   for (--last; last->next; last = last->next)
+   {
+      if (!strcmp((char*)ilast,(char*)(last->next + 1)))
+      {
+         return (void*)(last->next + 1);
+      }
+   }
+
+   return NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+void* hashtab::findsym(char* isym)
+{
+   BUCKET*  p;
+
+   p = table[hash(((BYTE*)isym) /*--*/) % tabsize];
+
+   while (p && strcmp((char*)isym,(char*)(p + 1)))
+   {
+      p = p->next;
+   }
+
+   return (void*)(p  ?  p + 1  :  NULL);
+}
+//////////////////////////////////////////////////////////////////////////
+void hashtab::delsym(void* isym)
+{
+   BUCKET*  sym = (BUCKET*)isym;
+
+   if (sym)
+   {
+      --numsyms;
+      --sym;
+
+      *(sym->prev) = sym->next;
+
+      if (*(sym->prev))
+      {
+         sym->next->prev = sym->prev;
+      }
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+void hashtab::dump(FILE* o)
+{
+   //--------------------------------------------------------
+   // dump all of the symbols
+   //--------------------------------------------------------
+   int      i;
+   BUCKET*  b;
+   symbol*  s;
+
+   for (i = 0; i < tabsize; ++i)
+   {
+      if (table[i])   //anything is this one?
+      {
+         b = table[i];
+
+         while (b)
+         {
+            s = (symbol*)(b + 1);
+            s->PrintInfo(o);  //print symbol information
+            b = b->next;
+         }
+      }
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+// member functions for symbol class
+//////////////////////////////////////////////////////////////////////////
+symbol::symbol(char* s)
+{
+   strcpy(name,s);
+   next = NULL;
+   sv = NULL;
+   value.lv = 0;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol::~symbol()
+{
+   if (sv)
+   {
+      delete[] sv;
+      sv = NULL;
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::Init() //fake constructor
+{
+   next = NULL;
+   sv = NULL;
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetName(char* s)
+{
+   strcpy(name,s);
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetVal(int v)
+{
+   value.lv = v;
+}
+//////////////////////////////////////////////////////////////////////////
+int symbol::GetIntVal()
+{
+   int  val = 0;
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         val = value.lv;
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         val = (int) value.dv;
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         val = 0;
+         break;
+   }
+
+   return val;
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetVal(double v)
+{
+   value.dv = v;
+}
+//////////////////////////////////////////////////////////////////////////
+double symbol::GetDoubleVal()
+{
+   double   val   = 0.0;
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         val = (double) value.lv;
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         val = value.dv;
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         val = 0.0;
+         break;
+   }
+
+   return val;
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetType(int t)
+{
+   type = t;
+}
+//////////////////////////////////////////////////////////////////////////
+int symbol::GetType()
+{
+   return type;
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetVal(symbol* v)
+{
+   int   vtype = v->GetType();
+   type = vtype;
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      {
+         value.lv = v->GetIntVal();
+         break;
+      }
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+      {
+         value.dv = v->GetDoubleVal();
+         break;
+      }
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+      {
+         sv = new char[v->GetStringLen() + 1];
+         strcpy(sv,v->GetStringVal());
+         break;
+      }
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+char* symbol::GetStringVal()
+{
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         if (!sv)
+         {
+            sv = new char[256];
+         }
+         sprintf(sv,"%ld",value.lv);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         if (!sv)
+         {
+            sv = new char[256];
+         }
+         sprintf(sv,"%lf",value.dv);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+   return sv;
+}
+//////////////////////////////////////////////////////////////////////////
+int symbol::GetStringLen()
+{
+   int   l  = 0;
+   if (sv)
+   {
+      l = strlen(sv);
+   }
+   return l;
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetMaxStringLen(int d)
+{
+   sv = new char[d];
+   value.lv = d;
+   memset(sv,0,d);   //zero new memory
+}
+//////////////////////////////////////////////////////////////////////////
+void symbol::SetVal(char* s)
+{
+   sv = new char[strlen(s) + 1];
+   strcpy(sv,s);
+}
+//////////////////////////////////////////////////////////////////////////
+static const char*   symtypes[] =
+{
+   "No type",
+   "Int",
+   "Int",
+   "Double",
+   "Double",
+   "String",
+   "String"
+};
+//////////////////////////////////////////////////////////////////////////
+void symbol::PrintInfo(FILE* o)
+{
+   fprintf(o,"---------------\"%s\"----------------\n",name);
+   fprintf(o,"Type = %s\n",symtypes[type]);
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         fprintf(o,"%ld\n",value.lv);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         fprintf(o,"%lf\n",value.dv);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         if (sv)
+         {
+            fprintf(o,"MaxSize:%ld->%s\n",value.lv,sv);
+         }
+         else
+         {
+            fprintf(o,"No String Yet\n");
+         }
+         break;
+   }
+
+   fprintf(o,"--------------------------------------------\n");
+}
+//////////////////////////////////////////////////////////////////////////
+// Misc Program Utility Routines
+//////////////////////////////////////////////////////////////////////////
+symbol* MakeIntValue(int v)
+{
+   symbol*  s  = new symbol("temp");
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+int ConvertToInt(symbol* s,int deleteflag)
+{
+   int   type  = s->GetType();
+   int  v     = 0;
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         v = s->GetIntVal();
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         v = (int) s->GetDoubleVal();
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         printf("Big Time Error!\n");
+         break;
+   }
+
+   if (!((type & 1)) && deleteflag)   // delete temporary symbol if desired
+   {
+      delete s;
+      s = NULL;
+   }
+
+   return v;
+}
+//////////////////////////////////////////////////////////////////////////
+void DoForLoop(symbol* s,symbol* limit,symbol* step)
+{
+   int   flag;
+
+   ++ForStackPointer;      //increment stack pointer
+   ForStack[ForStackPointer].start = FindNextLine((int) CurrentLineNumber,ProgramSpace,&flag);
+   ForStack[ForStackPointer].count = ConvertToInt(limit,1);
+   ForStack[ForStackPointer].step = ConvertToInt(step,1);
+   ForStack[ForStackPointer].loopvar = s;
+}
+//////////////////////////////////////////////////////////////////////////
+void DoAssign(symbol* s,symbol* v)
+{
+   int   type1 = v->GetType();
+   switch (s->GetType())
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(v->GetIntVal());
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v->GetDoubleVal());
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetVal(v->GetStringVal());
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+void DoPrint(symbol* v)
+{
+   int   type  = v->GetType();
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         printf("%ld",v->GetIntVal());
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         printf("%lf",v->GetDoubleVal());
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         printf("%s",v->GetStringVal());
+         break;
+   }
+
+   if (!(type & 1))  // check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+void DoPoke(symbol* a,symbol* v,int optype)
+{
+   int  address;
+   int  val   = 0;
+   int   type  = v->GetType();
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         val = v->GetIntVal();
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         val = (int) v->GetDoubleVal();
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  // check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   type = a->GetType();
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         address = v->GetIntVal();
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         address = (int) v->GetDoubleVal();
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete a;
+      a = NULL;
+   }
+
+   switch (optype)
+   {
+      case BYTE_POKE:
+         *((char*)a) = (char)val;
+         break;
+      case WORD_POKE:
+         *((int*)a) = (int)val;
+         break;
+      case INT_POKE:
+         *((int*)a) = val;
+         break;
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoEquals(symbol* v1,symbol* v2)
+{
+   int     v     = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s     = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetIntVal() == v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = (double) v1->GetIntVal() == v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetDoubleVal() == (double) v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetDoubleVal() == v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = 0;
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = 0;
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoNotEquals(symbol* v1,symbol* v2)
+{
+   int     v     = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetIntVal() != v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = (double) v1->GetIntVal() != v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetDoubleVal() != (double) v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetDoubleVal() != v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = 0;
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = 0;
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoLogicalAnd(symbol* v1,symbol* v2)
+{
+   int     v     = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s     = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         v = v1->GetIntVal() && v2->GetIntVal();
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         v = 0;
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoLogicalOr(symbol* v1,symbol* v2)
+{
+   int     v     = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetIntVal() || v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetIntVal() || (int) v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = (int) v1->GetDoubleVal() || v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = (int) v1->GetDoubleVal() || (int) v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = 0;
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = 0;
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+   }
+
+   if (!(type1 & 1)) //check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) //check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoAdd(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+   symbol*  s     = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(v1->GetIntVal() + v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetDoubleVal() + v2->GetDoubleVal());
+         s->SetType(SYMBOLTYPE_TEMPDOUBLE);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetMaxStringLen(v1->GetStringLen() + v2->GetStringLen() + 1);
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         strcpy(s->GetStringVal(),v1->GetStringVal());
+         strcat(s->GetStringVal(),v2->GetStringVal());
+         break;
+   }
+
+   if (!(type1 & 1)) //check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) //check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoSubtract(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(v1->GetIntVal() - v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetDoubleVal() - v2->GetDoubleVal());
+         s->SetType(SYMBOLTYPE_TEMPDOUBLE);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetVal(0l);
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) //check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) //check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoMult(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(v1->GetIntVal() * v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetDoubleVal() * v2->GetDoubleVal());
+         s->SetType(SYMBOLTYPE_TEMPDOUBLE);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetVal(0l);
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoDivide(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(v1->GetIntVal() / v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetDoubleVal() / v2->GetDoubleVal());
+         s->SetType(SYMBOLTYPE_TEMPDOUBLE);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetVal(0l);
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoMod(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetIntVal() % v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetVal(0l);
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoGreaterThan(symbol* v1,symbol* v2)
+{
+   int     v = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetIntVal() > v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetDoubleVal() > v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetDoubleVal() > v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetDoubleVal() > v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = 0;
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = 0;
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoLessThan(symbol* v1,symbol* v2)
+{
+   int     v = 0;
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetIntVal() < v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = (double) v1->GetIntVal() < v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = v1->GetDoubleVal() < (double) v2->GetIntVal();
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = v1->GetDoubleVal() < v2->GetDoubleVal();
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         switch (type2)
+         {
+            case SYMBOLTYPE_INT:
+            case SYMBOLTYPE_TEMPINT:
+               v = 0;
+               break;
+            case SYMBOLTYPE_DOUBLE:
+            case SYMBOLTYPE_TEMPDOUBLE:
+               v = 0;
+               break;
+            case SYMBOLTYPE_STRING:
+            case SYMBOLTYPE_TEMPSTRING:
+               v = 0;
+               break;
+         }
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   s->SetVal(v);
+   s->SetType(SYMBOLTYPE_TEMPINT);
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoShiftRight(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetIntVal() >> v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoShiftLeft(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetIntVal() << v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+
+symbol* DoBitAnd(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetIntVal() & v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoBitOr(symbol* v1,symbol* v2)
+{
+   int      type1 = v1->GetType();
+   int      type2 = v2->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type1)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(v1->GetIntVal() | v2->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         s->SetType(SYMBOLTYPE_TEMPSTRING);
+         break;
+   }
+
+   if (!(type1 & 1)) // check to see if input symbol is a temp
+   {
+      delete v1;
+      v1 = NULL;
+   }
+
+   if (!(type2 & 1)) // check to see if input symbol is a temp
+   {
+      delete v2;
+      v2 = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoNeg(symbol* v)
+{
+   int      type  = v->GetType();
+
+   symbol*  s = new symbol("temp");
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(-v->GetIntVal());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         s->SetVal(-v->GetDoubleVal());
+         s->SetType(SYMBOLTYPE_TEMPDOUBLE);
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoPeekI(symbol* v)
+{
+   int      type  = v->GetType();
+   symbol*  s     = new symbol("temp");
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(*((int*)(v->GetIntVal())));
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoPeekW(symbol* v)
+{
+   int      type  = v->GetType();
+   symbol*  s     = new symbol("temp");
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(int(*((int*)(v->GetIntVal()))));
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoPeekB(symbol* v)
+{
+   int      type  = v->GetType();
+   symbol*  s     = new symbol("temp");
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(int(*((char*)(v->GetIntVal()))));
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  // check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoRandom(symbol* v)
+{
+   int      type  = v->GetType();
+   symbol*  s     = new symbol("temp");
+
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+      {
+         // s->SetVal((int)rand((int)(v->GetIntVal())));
+         s->SetVal((int)rand());
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      }
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+      {
+         break;
+      }
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+      {
+         break;
+      }
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+symbol* DoAbs(symbol* v)
+{
+   int      type  = v->GetType();
+   symbol*  s     = new symbol("temp");
+   switch (type)
+   {
+      case SYMBOLTYPE_INT:
+      case SYMBOLTYPE_TEMPINT:
+         s->SetVal(labs(v->GetIntVal()));
+         s->SetType(SYMBOLTYPE_TEMPINT);
+         break;
+      case SYMBOLTYPE_DOUBLE:
+      case SYMBOLTYPE_TEMPDOUBLE:
+         break;
+      case SYMBOLTYPE_STRING:
+      case SYMBOLTYPE_TEMPSTRING:
+         break;
+   }
+
+   if (!(type & 1))  //check to see if input symbol is a temp
+   {
+      delete v;
+      v = NULL;
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+char* getline(int prompt)
+{
+   static char buff[80];
+
+   int         c = 0;
+   int         index = 0;
+
+   putchar(prompt);
+
+   while ((c = getchar()) != '\n')
+   {
+      buff[index++] = (char)c;
+   }
+
+   buff[index++] = (char)c;
+   buff[index]   = 0;
+
+   return buff;
+}
+//////////////////////////////////////////////////////////////////////////
+int LineNumber(char* s)
+{
+   /* figure out if there is a line number or not  */
+   /* returns 0 if no line number   */
+   return atoi(s);
+}
+//////////////////////////////////////////////////////////////////////////
+char* FindLine(int linenumber,char* s,int* flag)
+{
+   int   ln;
+
+   while (*s)
+   {
+      if ((ln = LineNumber(s)) == linenumber)
+      {
+         *flag = 0;
+         return(s);
+      }
+
+      if (ln > linenumber)
+      {
+         *flag = 1;
+         return s;
+      }
+
+      /* not right line number   */
+      s = strchr(s,'\n') ; /* find next new line   */
+      ++s;           /* increment to beginning of line   */
+   }
+
+   return s;
+}
+//////////////////////////////////////////////////////////////////////////
+char* FindNextLine(int linenumber,char* s,int* flag)
+{
+   char* p  = FindLine(linenumber,s,flag);
+   char* q  = strchr(p,'\n');
+   ++q;
+   return q;      /* well, there should be a line number here  */
+}
+//////////////////////////////////////////////////////////////////////////
+int InsertLine
+(
+   char*       s,
+   char*       newline,
+   char*       space,
+   DWORD       size
+)
+{
+   // s is pointer of place to put new line
+   // newline is pointer to line to insert
+   // space is the area where it is to be put
+   // size is number of bytes in space
+   int   iLen     = strlen(newline);
+   int   iMemSize = strlen(s);
+
+   if (s + iLen + iMemSize > space + size)
+   {
+      printf("Not Enough Memory\n");
+      exit(1);
+   }
+
+   if (iLen)
+   {
+      memmove(s + iLen,s,iMemSize);
+   }
+   else
+   {
+      printf("Did not have to move memory\n");
+   }
+
+   memcpy(s,newline,iLen); // copy in new line
+
+   return 1;            // yep, we could copy 
+}
+//////////////////////////////////////////////////////////////////////////
+void DelLine(char* s,char* space,DWORD size)
+{
+   char*    p = strchr(s,'\n');
+
+   if (p)
+   {
+      memmove(s,p + 1,size - (p - space) + 1);
+   }
+   else
+   {
+      *s = 0;
+   }
+}
+//////////////////////////////////////////////////////////////////////////
+// entry into main
+//////////////////////////////////////////////////////////////////////////
+int tinybasic(int workspace)
+{
+   int   loop = 1;
+
+   Symbols = (hashtab*)new hashtab(47);
+   ProgramSpace = new char[workspace];
+   ProgSpaceSize = workspace;
+   memset(ProgramSpace,0,workspace);   /* zero workspace */
+
+   while (loop)
+   {
+      int   flag;
+
+      char*    s = getline('>');
+
+      int   ln = LineNumber(s);
+
+      if (ln)
+      {
+         // PARSE THE LINE
+         buffer_selector = COMMAND_LINE;
+         PCB.pointer = (BYTE*)s;
+         tiny();
+
+         if (PCB.exit_flag == AG_SYNTAX_ERROR_CODE)
+         {
+            printf("Syntax Error\n");
+         }
+         
+         char*    p = FindLine(ln,ProgramSpace,&flag);
+         
+         if (p)
+         {
+            if (!flag)
+            {
+               DelLine(p,ProgramSpace,workspace);
+            }
+            InsertLine(p,s,ProgramSpace,workspace);
+         }
+         else
+         {
+            printf("Could Not Insert that line\n");
+         }
+      }
+      else
+      {
+         bRun = true;
+         buffer_selector = COMMAND_LINE;
+
+         PCB.pointer = (BYTE*)s;
+
+         tiny();
+
+         if (tiny_value())
+         {
+            loop = 0;
+         }
+
+         bRun = false;
+      }
+   }
+
+   delete[] ProgramSpace;
+   ProgramSpace = NULL;
+
+   delete Symbols;
+   Symbols = NULL;
+   
+   return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+int main()
+{
+   setbuf(stdout,NULL);
+   tinybasic(10000);
+   return 0;
+}
+//////////////////////////////////////////////////////////////////////////
+} // end of embedded C code

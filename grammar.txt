@@ -1,0 +1,169 @@
+//////////////////////////////////////////////////////////////////////////
+// Tiny Basic Interpreter recompilesd with MSVC 6.0
+// http://www.noniandjim.com/Jim/uproc/tinymsdos.zip
+// (c) gazlan@yandex.ru, 2018
+//////////////////////////////////////////////////////////////////////////
+// Tiny Basic Interpreter
+// Copyright (c) 1995 Jim Patchell
+// Requires the use of Parsifal Software's Anagram LALR compiler.
+// http://www.parsifalsoft.com/
+//////////////////////////////////////////////////////////////////////////
+
+eof         = 0
+all letters = 1..126 - '"'
+letter      = 'a-z' + 'A-Z' + '_' + '.'
+digit       = '0-9'
+noteol      = ~(eof + '\n')
+
+eol
+   ->   '\n'
+   ->   '\r'
+
+white space
+   ->   ' ' + '\t'
+
+basic
+   ->   basic statement list , eof
+                                                            
+basic statement list                                   
+   ->   basic line
+   ->   basic statement list , basic line
+                                                            
+basic line                                             
+   ->   opt line number , basic statement , eol
+   ->   opt line number , declaration , eol                     
+                                                            
+opt line number                                       
+   ->                                                       
+   ->   line number
+
+declaration
+   ->   "INT" , decl var list
+   ->    "DOUBLE" , decl var list
+   ->    "STRING" , string decl var list
+
+decl var list
+   -> variable name
+   -> decl var list , ',' , variable name
+
+string decl var list
+   -> variable name , '[' , integer , ']'  
+   ->string decl var list , ',' , variable name , '[' , integer , ']'
+
+basic statement
+   -> "DUMP"
+   -> "LIST"
+   -> "NEW"  
+   -> "RUN"
+   -> "SAVE" , name string  
+   -> "LOAD" , name string
+   -> assignment 
+   -> conditional 
+   -> "GOTO" , line number
+   -> "GOSUB" , line number
+   -> "RETURN"
+   -> forloop
+   -> "NEXT" , variable name
+   -> input
+   -> output
+   -> "POKEB" , '(' , expression:p , ',' , expression:v , ')'
+   -> "POKEW" , '(' , expression:p , ',' , expression:v , ')'
+   -> "POKEL" , '(' , expression:p , ',' , expression:v , ')'
+   -> "BYE" 
+
+input
+   -> "INPUT" , variable name list
+
+variable name list                                            
+   -> variable name
+   -> variable name list , ',' , variable name
+
+output
+   -> "PRINT", expression list
+
+expression list
+   -> expression
+   -> expression list , ',' , expression
+
+assignment
+   -> variable name , '=' , expression
+
+conditional
+   -> if part, then part, nothing
+   -> if part, then part, else part
+
+nothing
+   -> 
+
+if part
+   -> "IF" , expression
+
+then part
+   -> "THEN" , basic statement
+
+else part
+   -> "ELSE", basic statement 
+
+forloop
+   -> "FOR" , assignment , "TO" , expression , optional step
+
+optional step
+   ->                    
+   -> "STEP" , expression
+
+expression
+   -> unary expression
+   -> expression , '=' ,  expression
+   -> expression , "!=" , expression
+   -> expression , "&&" , expression
+   -> expression , "||" , expression
+   -> expression , '+' ,  expression
+   -> expression , '-' ,  expression
+   -> expression , '*' ,  expression
+   -> expression , '/' ,  expression
+   -> expression , '%' ,  expression
+   -> expression , '>' ,  expression
+   -> expression , '<' ,  expression
+   -> expression , ">>" , expression
+   -> expression , "<<" , expression
+   -> expression , '&' ,  expression
+   -> expression , '|' ,  expression
+
+ unary expression
+   -> postfix expression
+   -> '-' , expression
+
+postfix expression
+   -> primary expression
+   -> "ABS" , '(' , expression , ')'  
+   -> "RND" , '(' , expression , ')'  
+   -> "PEEKB" , '(' , expression , ')' 
+   -> "PEEKW" , '(' , expression , ')'
+   -> "PEEKI" , '(' , expression , ')' 
+
+ primary expression
+   -> variable name
+   -> integer
+   -> String Value
+   -> '(' , expression , ')'
+
+variable name
+   -> name string
+
+String Value
+   -> all character string , '"' 
+
+all character string
+   -> '"'
+   -> all character string , all letters
+
+name string
+   -> letter
+   -> name string , letter + digit
+
+integer
+   -> digit
+   -> integer , digit
+
+line number
+   -> integer
