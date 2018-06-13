@@ -68,7 +68,7 @@ basic statement
    -> output
    -> "POKEB" , '(' , expression:p , ',' , expression:v , ')'
    -> "POKEW" , '(' , expression:p , ',' , expression:v , ')'
-   -> "POKEL" , '(' , expression:p , ',' , expression:v , ')'
+   -> "POKEI" , '(' , expression:p , ',' , expression:v , ')'
    -> "BYE" 
 
 input
